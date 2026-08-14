@@ -1,0 +1,77 @@
+# 把官方仓库的全部分支、tag 镜像到本 fork。
+# 只应放在 sync 分支上；请把 GitHub 默认分支改成 sync，否则定时任务不会跑。
+# 不会删除、也不会覆盖：sync、以及 cs/* 自己的开发分支。
+
+name: 同步上游全部分支
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: sync-upstream
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出 sync 分支
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: sync
+
+      - name: 镜像官方分支和 tag
+        env:
+          UPSTREAM: https://github.com/deepseek-ai/deepseek-harness.git
+        run: |
+          set -euo pipefail
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git remote add upstream "$UPSTREAM" 2>/dev/null || git remote set-url upstream "$UPSTREAM"
+          git fetch --prune upstream --tags
+          git fetch --prune origin
+
+          should_skip() {
+            local branch="$1"
+            [ "$branch" = "HEAD" ] && return 0
+            [ "$branch" = "sync" ] && return 0
+            case "$branch" in
+              cs/*) return 0 ;;
+            esac
+            return 1
+          }
+
+          git for-each-ref --format='%(refname:strip=3)' refs/remotes/upstream \
+          | while read -r branch; do
+              [ -z "$branch" ] && continue
+              if should_skip "$branch"; then
+                echo "跳过分支：${branch}"
+                continue
+              fi
+
+              upstream_sha="$(git rev-parse "refs/remotes/upstream/${branch}")"
+              if git rev-parse --verify "refs/remotes/origin/${branch}" >/dev/null 2>&1; then
+                origin_sha="$(git rev-parse "refs/remotes/origin/${branch}")"
+                if [ "$origin_sha" = "$upstream_sha" ]; then
+                  echo "已是最新：${branch}"
+                  continue
+                fi
+                echo "更新分支：${branch}"
+                git push origin "refs/remotes/upstream/${branch}:refs/heads/${branch}" \
+                  --force-with-lease="refs/heads/${branch}:${origin_sha}"
+              else
+                echo "新建分支：${branch}"
+                git push origin "refs/remotes/upstream/${branch}:refs/heads/${branch}"
+              fi
+            done
+
+          echo "同步 tag"
+          git push origin --tags
