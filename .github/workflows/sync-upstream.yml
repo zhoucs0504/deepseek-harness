@@ -1,6 +1,10 @@
 # 把官方仓库的全部分支、tag 镜像到本 fork。
 # 只应放在 sync 分支上；请把 GitHub 默认分支改成 sync，否则定时任务不会跑。
 # 不会删除、也不会覆盖：sync、以及 cs/* 自己的开发分支。
+#
+# 官方分支含 .github/workflows/，默认 GITHUB_TOKEN 不能改这些文件。
+# 必须在仓库 Secrets 中配置 SYNC_UPSTREAM_TOKEN：
+# Classic PAT 勾选 repo + workflow；或 fine-grained PAT 授予 Contents/Workflows 读写。
 
 name: 同步上游全部分支
 
@@ -14,26 +18,38 @@ concurrency:
   cancel-in-progress: true
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   sync:
     runs-on: ubuntu-latest
     steps:
+      - name: 确认已配置同步令牌
+        env:
+          TOKEN: ${{ secrets.SYNC_UPSTREAM_TOKEN }}
+        run: |
+          if [ -z "$TOKEN" ]; then
+            echo "::error::缺少仓库密钥 SYNC_UPSTREAM_TOKEN。请创建带 workflow 权限的 PAT，并在 Settings → Secrets and variables → Actions 中添加。"
+            exit 1
+          fi
+
       - name: 检出 sync 分支
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
           ref: sync
+          token: ${{ secrets.SYNC_UPSTREAM_TOKEN }}
 
       - name: 镜像官方分支和 tag
         env:
           UPSTREAM: https://github.com/deepseek-ai/deepseek-harness.git
+          SYNC_UPSTREAM_TOKEN: ${{ secrets.SYNC_UPSTREAM_TOKEN }}
         run: |
           set -euo pipefail
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git remote set-url origin "https://x-access-token:${SYNC_UPSTREAM_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
 
           git remote add upstream "$UPSTREAM" 2>/dev/null || git remote set-url upstream "$UPSTREAM"
           git fetch --prune upstream --tags
